@@ -5,8 +5,9 @@ var cookieParser = require("cookie-parser");
 var logger = require("morgan");
 const session = require("express-session");
 const passport = require("passport");
-const localStrategy = require("passport-local").Strategy;
+const LocalStrategy = require("passport-local").Strategy;
 const mongoose = require("mongoose");
+const bycrypt = require("bcryptjs");
 var app = express();
 require("dotenv").config();
 
@@ -41,10 +42,47 @@ app.use(passport.session());
 app.use(express.urlencoded({ extended: false }));
 
 // setting up LocalStrategy
+passport.use(
+  new LocalStrategy(async (username, password, done) => {
+    try {
+      const user = await User.findOne({ username: username });
+      if (!user) {
+        return done(null, false, { message: "Incorrect username" });
+      }
+      const match = await bycrypt.compare(password, user.password);
+      if (!match) {
+        // no match!
+        return done(null, false, { message: "Incorrect password" });
+      }
+
+      return done(null, user);
+    } catch (err) {
+      return done(err);
+    }
+  })
+);
+
+passport.serializeUser((user, done) => {
+  done(null, user.id);
+});
+
+passport.deserializeUser(async (id, done) => {
+  try {
+    const user = await User.findById(id);
+    done(null, user);
+  } catch (err) {
+    done(err);
+  }
+});
+
+app.use((req, res, next) => {
+  res.locals.currentUser = req.user;
+  next();
+});
 
 // handle route for get index
 app.get("/", (req, res) => {
-  res.render("index");
+  res.render("index", { user: req.user });
 });
 
 // handle route for get signup form
@@ -54,18 +92,35 @@ app.get("/sign-up", (req, res) => {
 
 // handle POST signup
 app.post("/sign-up", async (req, res, next) => {
-  try {
-    const user = new User({
-      username: req.body.username,
-      password: req.body.password,
-    });
-    const result = await user.save();
-    res.redirect("/");
-  } catch (err) {
-    return next(err);
-  }
+  bycrypt.hash(req.body.password, 10, async (err, hashedPassword) => {
+    try {
+      const user = new User({
+        username: req.body.username,
+        password: hashedPassword,
+      });
+      const result = await user.save();
+      res.redirect("/");
+    } catch (err) {
+      return next(err);
+    }
+  });
 });
 
+// handle post login
+app.post(
+  "/log-in",
+  passport.authenticate("local", { successRedirect: "/", failureRedirect: "/" })
+);
+
+// handle logout GET
+app.get("/log-out", (req, res, next) => {
+  req.logout((err) => {
+    if (err) {
+      return next(err);
+    }
+    res.redirect("/");
+  });
+});
 // catch 404 and forward to error handler
 app.use(function (req, res, next) {
   next(createError(404));
